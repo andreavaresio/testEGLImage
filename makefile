@@ -4,10 +4,9 @@ TARGET = TestEGLImage.ex
 
 #lista directory in cui cercare sorgenti 
 VPATH =	. \
-	../common
 
 #lista directory in cui cercare .h
-INCLUDE =  -I../common -I../boost
+INCLUDE = 
 
 #elenco dei sorgenti
 SOURCES =  TestEGLImage.cpp
@@ -28,7 +27,7 @@ BASEOUTDIR = linuxout/
 #dipendenza da altre librerie: per ognuna delle librerie aggiungere un comando al target lib
 LIBRARYDEPENDENCY = 
 
-include ../target-linux.mk
+include target-linux.mk
 
 lib:
 	@echo

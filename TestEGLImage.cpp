@@ -14,7 +14,7 @@
 
 #define WIDTH 1280
 #define HEIGHT 720
-#define NCYCLES 1
+#define NCYCLES 100
 
 EGLint g_configAttributes[] =
 {
@@ -59,6 +59,15 @@ EGLint g_windowAttributes[] =
 	* EGL_NONE
 	*/
 };
+
+EGLDisplay	g_sEGLDisplay;
+EGLSurface	g_sEGLSurface;
+EGLContext	g_sEGLContext;
+GLuint g_iVShader, g_iFShader;
+GLuint g_iProgram;
+GLint g_iLocPosition;
+GLint g_iLocTexCoord;
+GLuint g_iTex;
 
 EGLConfig findConfig(EGLDisplay display)
 {
@@ -192,9 +201,9 @@ EGLConfig findConfig(EGLDisplay display)
 {\
 	GLenum glError = glGetError(); \
 	if(glError != GL_NO_ERROR) \
-			{ \
+				{ \
 		printf ("glGetError() = %i (0x%.8x) at line %i\n", glError, glError, __LINE__); \
-			} \
+				} \
 }\
 
 #define VERTEXPOS 1.0f
@@ -243,11 +252,13 @@ void UploadTexture_UsingTextSubImage2D(unsigned char *InPicture, GLuint _iTex)
 	_GLCheck();
 }
 
-void UpdatePixmap(CAVWindow wind, Pixmap XPixMap, XImage *pXImage, unsigned char *TexData)
+void UpdatePixmap_memcpy(XImage *pXImage, unsigned char *TexData)
 {
-#if 0
 	memcpy(pXImage->data, TexData, WIDTH * HEIGHT * 4);
-#else
+}
+
+void UpdatePixmap_UsingX(CAVWindow wind, Pixmap XPixMap)
+{
 	GC gc = DefaultGC(wind.GetXDisplayPtr(), 0);
 
 	static unsigned long foreground;
@@ -260,44 +271,31 @@ void UpdatePixmap(CAVWindow wind, Pixmap XPixMap, XImage *pXImage, unsigned char
 
 	XFlushGC(wind.GetXDisplayPtr(), gc);
 	XSync(wind.GetXDisplayPtr(), True);
-#endif
 }
 
-int main(int argc, char **argv)
+void SetupEGL(CAVWindow &wind)
 {
-	CAVWindow wind;
-
-	EGLDisplay	m_sEGLDisplay;
-	EGLSurface	m_sEGLSurface;
-	EGLContext	m_sEGLContext;
 	EGLint major, minor;
 
-	GLuint m_iVShader, m_iFShader;
-	GLuint m_iProgram;
-	GLint m_iLocPosition;
-	GLint m_iLocTexCoord;
-	GLint iStatus;
+	g_sEGLDisplay = eglGetDisplay(wind.GetXDisplayPtr()); assert(g_sEGLDisplay != EGL_NO_DISPLAY);
 
-	wind.CreaFinestra(WIDTH, HEIGHT, L"testEGLImage", 0, 0);
-	m_sEGLDisplay = eglGetDisplay(wind.GetXDisplayPtr()); assert(m_sEGLDisplay != EGL_NO_DISPLAY);
-
-	EGLBoolean success = eglInitialize(m_sEGLDisplay, &major, &minor); assert(success == EGL_TRUE);
-	printf ("major=%d, minor = %d\n", major, minor );
+	EGLBoolean success = eglInitialize(g_sEGLDisplay, &major, &minor); assert(success == EGL_TRUE);
+	printf("major=%d, minor = %d\n", major, minor);
 
 	g_configAttributes[15] = EGL_OPENGL_ES2_BIT;
 	g_contextAttributes[1] = 2;
 	g_contextAttributes[2] = EGL_NONE;
 
-	g_config = findConfig(m_sEGLDisplay);
-	m_sEGLSurface = eglCreateWindowSurface(m_sEGLDisplay, g_config, (EGLNativeWindowType)wind.GethWnd(), g_windowAttributes); assert(m_sEGLSurface != EGL_NO_SURFACE);
+	g_config = findConfig(g_sEGLDisplay);
+	g_sEGLSurface = eglCreateWindowSurface(g_sEGLDisplay, g_config, (EGLNativeWindowType)wind.GethWnd(), g_windowAttributes); assert(g_sEGLSurface != EGL_NO_SURFACE);
 	eglBindAPI(EGL_OPENGL_ES_API);
-	m_sEGLContext = eglCreateContext(m_sEGLDisplay, g_config, EGL_NO_CONTEXT, g_contextAttributes); assert(m_sEGLContext != EGL_NO_CONTEXT);
-	eglMakeCurrent(m_sEGLDisplay, m_sEGLSurface, m_sEGLSurface, m_sEGLContext);
+	g_sEGLContext = eglCreateContext(g_sEGLDisplay, g_config, EGL_NO_CONTEXT, g_contextAttributes); assert(g_sEGLContext != EGL_NO_CONTEXT);
+	eglMakeCurrent(g_sEGLDisplay, g_sEGLSurface, g_sEGLSurface, g_sEGLContext);
 
-	printf ("Vendor =%s\n", eglQueryString(m_sEGLDisplay, EGL_VENDOR));
-	printf ("API    =%s\n", eglQueryString(m_sEGLDisplay, EGL_CLIENT_APIS));
-	printf ("Version=%s\n", eglQueryString(m_sEGLDisplay, EGL_VERSION));
-	printf ("Extens =%s\n", eglQueryString(m_sEGLDisplay, EGL_EXTENSIONS));
+	printf("Vendor =%s\n", eglQueryString(g_sEGLDisplay, EGL_VENDOR));
+	printf("API    =%s\n", eglQueryString(g_sEGLDisplay, EGL_CLIENT_APIS));
+	printf("Version=%s\n", eglQueryString(g_sEGLDisplay, EGL_VERSION));
+	printf("Extens =%s\n", eglQueryString(g_sEGLDisplay, EGL_EXTENSIONS));
 	const GLubyte *strExt = glGetString(GL_EXTENSIONS);
 	printf("GL_EXTENSIONS: %s\n", strExt);
 
@@ -312,33 +310,70 @@ int main(int argc, char **argv)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	m_iVShader = glCreateShader(GL_VERTEX_SHADER);
-	m_iFShader = glCreateShader(GL_FRAGMENT_SHADER);
+	_GLCheck();
+}
+
+void SetupShaders()
+{
+	GLint iStatus;
+
+	g_iVShader = glCreateShader(GL_VERTEX_SHADER);
+	g_iFShader = glCreateShader(GL_FRAGMENT_SHADER);
 	const char *pVShader = _VShaderSource_Blender;
 	const char *pFShader = _FShaderSource_Blender;
-	glShaderSource(m_iVShader, 1, &pVShader, NULL);
-	glShaderSource(m_iFShader, 1, &pFShader, NULL);
-	glCompileShader(m_iVShader);
-	glGetShaderiv(m_iVShader, GL_COMPILE_STATUS, &iStatus); assert(iStatus != GL_FALSE);
-	glCompileShader(m_iFShader);
-	glGetShaderiv(m_iFShader, GL_COMPILE_STATUS, &iStatus);assert(iStatus != GL_FALSE);
-	m_iProgram = glCreateProgram();
-	glAttachShader(m_iProgram, m_iVShader);
-	glAttachShader(m_iProgram, m_iFShader);
-	glLinkProgram(m_iProgram);
-	m_iLocPosition = glGetAttribLocation(m_iProgram, "a_position");
-	m_iLocTexCoord = glGetAttribLocation(m_iProgram, "a_texCoord");
+	glShaderSource(g_iVShader, 1, &pVShader, NULL);
+	glShaderSource(g_iFShader, 1, &pFShader, NULL);
+	glCompileShader(g_iVShader);
+	glGetShaderiv(g_iVShader, GL_COMPILE_STATUS, &iStatus); assert(iStatus != GL_FALSE);
+	glCompileShader(g_iFShader);
+	glGetShaderiv(g_iFShader, GL_COMPILE_STATUS, &iStatus); assert(iStatus != GL_FALSE);
+	g_iProgram = glCreateProgram();
+	glAttachShader(g_iProgram, g_iVShader);
+	glAttachShader(g_iProgram, g_iFShader);
+	glLinkProgram(g_iProgram);
+	g_iLocPosition = glGetAttribLocation(g_iProgram, "a_position");
+	g_iLocTexCoord = glGetAttribLocation(g_iProgram, "a_texCoord");
 	_GLCheck();
 
-	GLuint iTex;
-	glGenTextures(1, &iTex);
+	glGenTextures(1, &g_iTex);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glBindTexture(GL_TEXTURE_2D, iTex);
+	glBindTexture(GL_TEXTURE_2D, g_iTex);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	_GLCheck();
+}
+
+char *Mode2String[3] = {
+	"glTexSubImage2D",
+	"EGLIMage and memcpy",
+	"EGLIMage and XFillRectangle"
+};
+
+int main(int argc, char **argv)
+{
+try
+{
+	int mode = -1;
+	if (argc != 2)
+	{
+		printf("Usage:\n%s <mode>\n", argv[0]);
+		printf("  mode=0 update texture using glTexSubImage2D\n");
+		printf("  mode=1 update texture using EGLIMage and memcpy\n");
+		printf("  mode=2 update texture using EGLIMage and XFillRectangle\n");
+		exit (1);
+	}
+	mode = atoi(argv[1]);
+	printf("Running mode=%d (%s)\n", mode, Mode2String[mode]);
+
+	CAVWindow wind;
+
+	wind.CreaFinestra(WIDTH, HEIGHT, L"testEGLImage", 0, 0);
+	SetupEGL(wind);
+	SetupShaders();
+
 	unsigned char *TexData = new unsigned char[WIDTH * HEIGHT * 4];
 
 	const EGLint img_attribs[] = {
@@ -350,7 +385,7 @@ int main(int argc, char **argv)
 	XImage *pXImage = XGetImage(wind.GetXDisplayPtr(), XPixMap, 0, 0, WIDTH, HEIGHT, 0xffffffff, XYPixmap);
 	printf("XGetImage %d %d %d %p\n", pXImage->width, pXImage->height, pXImage->depth, pXImage->data);
 
-	EGLImageKHR eglImage = eglCreateImageKHR(m_sEGLDisplay, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, (EGLClientBuffer)XPixMap, img_attribs);
+	EGLImageKHR eglImage = eglCreateImageKHR(g_sEGLDisplay, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, (EGLClientBuffer)XPixMap, img_attribs);
 	EGLint eglError = eglGetError();
 	if (eglError != EGL_SUCCESS)
 		printf("eglGetError() = %i (0x%.8x) at line %i\n", eglError, eglError, __LINE__);
@@ -373,24 +408,28 @@ int main(int argc, char **argv)
 			}
 		}
 
-		UploadTexture_UsingTextSubImage2D(TexData, iTex);
-		//UpdatePixmap(wind, XPixMap, pXImage, TexData);
+		if (mode==0)
+			UploadTexture_UsingTextSubImage2D(TexData, g_iTex);
+		if (mode == 1)
+			UpdatePixmap_memcpy(pXImage, TexData);
+		if (mode == 2)
+			UpdatePixmap_UsingX(wind, XPixMap);
 
 		//draw
-		glUseProgram(m_iProgram);
-		GLint BlenderSamplerLocInput = glGetUniformLocation(m_iProgram, "InputTex");
-		glVertexAttribPointer(m_iLocTexCoord, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), &vVertices[3]);
-		glEnableVertexAttribArray(m_iLocTexCoord);
+		glUseProgram(g_iProgram);
+		GLint BlenderSamplerLocInput = glGetUniformLocation(g_iProgram, "InputTex");
+		glVertexAttribPointer(g_iLocTexCoord, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), &vVertices[3]);
+		glEnableVertexAttribArray(g_iLocTexCoord);
 		glActiveTexture(GL_TEXTURE0);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 		glUniform1i(BlenderSamplerLocInput, 0);
-		glVertexAttribPointer(m_iLocPosition, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), vVertices);
-		glEnableVertexAttribArray(m_iLocPosition);
-		glBindTexture(GL_TEXTURE_2D, iTex);
+		glVertexAttribPointer(g_iLocPosition, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), vVertices);
+		glEnableVertexAttribArray(g_iLocPosition);
+		glBindTexture(GL_TEXTURE_2D, g_iTex);
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
 		GLenum glError = glGetError();
 		_GLCheck();
-		if (!eglSwapBuffers(m_sEGLDisplay, m_sEGLSurface))
+		if (!eglSwapBuffers(g_sEGLDisplay, g_sEGLSurface))
 			printf("Failed to swap buffers. %x\n", eglGetError());
 
 	}
@@ -398,36 +437,15 @@ int main(int argc, char **argv)
 	getchar();
 
 	delete[] TexData;
-	eglDestroyImageKHR(m_sEGLDisplay, eglImage);
+	eglDestroyImageKHR(g_sEGLDisplay, eglImage);
 	XFreePixmap(wind.GetXDisplayPtr(), XPixMap);
 	wind.ChiudiFinestra();
-
-	//glClearColor(1.0, 1.0, 0.0, 1.0);
-	//glClear(GL_COLOR_BUFFER_BIT);
-	//glFlush();
-	//eglSwapBuffers(m_sEGLDisplay, m_sEGLSurface);
+}
+catch (const char *e)
+{
+printf ("Exception: %s\n", e);
+}
 
 	return 0;
 }
 
-int main_minimal(int argc, char **argv)
-{
-
-	const EGLint attr[] =
-	{
-		EGL_IMAGE_PRESERVED_KHR, EGL_FALSE,
-		EGL_NONE
-	};
-
-	Display* Xdisplay = XOpenDisplay(NULL);
-	unsigned image_w = 1280;
-	unsigned image_h = 720;
-	Pixmap pixmap = XCreatePixmap(Xdisplay, DefaultRootWindow(Xdisplay), image_w, image_h, 32);
-
-	EGLDisplay EGLdisplay = eglGetDisplay(Xdisplay); if (EGL_NO_DISPLAY == EGLdisplay) { printf("ERROR in eglGetCurrentDisplay %x\n", eglGetError()); exit(1); }
-	if (EGL_FALSE == eglInitialize(EGLdisplay, NULL, NULL)){ printf("ERROR in eglInitialize %x\n", eglGetError()); exit(1); }
-
-	EGLImageKHR eglImage = eglCreateImageKHR(EGLdisplay, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, (EGLClientBuffer)pixmap, attr); if (EGL_NO_IMAGE_KHR == eglImage){printf("ERROR in eglCreateImageKHR %x\n", eglGetError());exit(1);}
-
-	printf("Ended\n");
-}
